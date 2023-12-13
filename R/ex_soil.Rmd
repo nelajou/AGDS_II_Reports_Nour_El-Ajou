@@ -1,0 +1,526 @@
+---
+title: "soil_tutorial"
+author: "Nour El-Ajou"
+date: "2023-11-23"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+rm(list = ls())
+```
+
+# Data download.
+
+
+```{r}
+
+
+sessionInfo()
+
+# Load soil data from sampling locations
+df_obs <- readr::read_csv(
+  here::here("data/berne_soil_sampling_locations.csv")
+)
+
+# Display data
+head(df_obs) |> 
+  knitr::kable()
+
+```
+
+# 5.1 Simple model
+
+Re-implement the digital soil mapping workflow, using Random Forest, as demonstrated in this tutorial, but for the binary categorical variable waterlog.100. Here are a few hints as a guide:
+
+Make sure that the categorical target variable is encoded as a factor using the function factor().
+
+Start with a model that includes all predictors, trained on the pre-defined training subset.
+
+Evaluate the model on the testing subset of the data
+
+Consider appropriate metrics as described in AGDS Book Chapter 8.3.
+
+Is the data balanced in terms of observed TRUE and FALSE values?
+
+What does this imply for the interpretation of the different metrics?
+
+
+
+```{r}
+# Get a list with the path to all raster files
+list_raster <- list.files(
+  here::here("data/covariates"),
+  full.names = TRUE
+  )
+```
+
+
+```{r}
+# Display data (lapply to clean names)
+lapply(
+  list_raster, 
+  function(x) sub(".*/(.*)", "\\1", x)
+  ) |> 
+  unlist() |> 
+  head(5) |> 
+  print()
+```
+
+
+```{r}
+# Load a raster file as example: Picking the slope profile at 2 m resolution
+raster_example <- terra::rast(
+  here::here("data/covariates/Se_slope2m.tif")
+  )
+raster_example
+```
+
+
+
+```{r}
+library(tidyterra)
+
+# To have some more flexibility, we can plot this in the ggplot-style as such:
+ggplot2::ggplot() +
+  tidyterra::geom_spatraster(data = raster_example) +
+  ggplot2::scale_fill_viridis_c(
+    na.value = NA,
+    option = "magma",
+    name = "Slope (%) \n"
+    ) +
+  ggplot2::theme_bw() +
+  ggplot2::scale_x_continuous(expand = c(0, 0)) +  # avoid gap between plotting area and axis
+  ggplot2::scale_y_continuous(expand = c(0, 0)) +
+  ggplot2::labs(title = "Slope of the Study Area")
+```
+
+
+
+```{r}
+# Load all files as one batch
+all_rasters <- terra::rast(list_raster)
+all_rasters
+```
+
+```{r}
+# Extract coordinates from sampling locations
+sampling_xy <- df_obs |> 
+  dplyr::select(x, y)
+
+# From all rasters, extract values for sampling coordinates
+df_covars <- terra::extract(
+  all_rasters,  # The raster we want to extract from
+  sampling_xy,  # A matrix of x and y values to extract for
+  ID = FALSE    # To not add a default ID column to the output
+  )
+
+df_full <- cbind(df_obs, df_covars)
+head(df_full) |> 
+  knitr::kable() 
+```
+
+```{r}
+vars_categorical <- df_covars |> 
+  
+  # Get number of distinct values per variable
+  dplyr::summarise(dplyr::across(dplyr::everything(), ~dplyr::n_distinct(.))) |> 
+  
+  # Turn df into long format for easy filtering
+  tidyr::pivot_longer(
+    dplyr::everything(), 
+    names_to = "variable", 
+    values_to = "n"
+    ) |> 
+  
+  # Filter out variables with 10 or less distinct values
+  dplyr::filter(n <= 10) |>
+  
+  # Extract the names of these variables
+  dplyr::pull('variable')
+
+cat("Variables with less than 10 distinct values:", 
+    ifelse(length(vars_categorical) == 0, "none", vars_categorical))
+```
+
+```{r}
+df_full <- df_full |> 
+  dplyr::mutate(dplyr::across(all_of(vars_categorical), ~as.factor(.)))
+```
+
+
+```{r}
+# Get number of rows to calculate percentages
+n_rows <- nrow(df_full)
+
+# Get number of distinct values per variable
+df_full |> 
+  dplyr::summarise(dplyr::across(dplyr::everything(), 
+                                 ~ length(.) - sum(is.na(.)))) |> 
+  tidyr::pivot_longer(dplyr::everything(), 
+                      names_to = "variable", 
+                      values_to = "n") |>
+  dplyr::mutate(perc_available = round(n / n_rows * 100)) |> 
+  dplyr::arrange(perc_available) |> 
+  head(10) |> 
+  knitr::kable()
+```
+
+```{r}
+df_full |> 
+  dplyr::select(1:20) |>   # reduce data for readability of the plot
+  visdat::vis_miss()
+```
+
+
+```{r}
+if (!dir.exists(here::here("data"))) system(paste0("mkdir ", here::here("data")))
+saveRDS(df_full, 
+        here::here("data/df_full.rds"))
+```
+
+# Train a random forest
+
+```{r}
+df_full <- readRDS(here::here("data/df_full.rds"))
+
+head(df_full) |> 
+  knitr::kable()
+```
+
+```{r}
+# Specify target: The pH in the top 10cm
+target <- "waterlog.100"
+
+# Specify predictors_all: Remove soil sampling and observational data
+predictors_all <- names(df_full)[14:ncol(df_full)]
+
+cat("The target is:", target,
+    "\nThe predictors_all are:", paste0(predictors_all[1:8], sep = ", "), "...")
+```
+```{r}
+df_full$waterlog.100 <- as.factor(df_full$waterlog.100)
+
+# Split dataset into training and testing sets
+df_train <- df_full |> dplyr::filter(dataset == "calibration")
+df_test  <- df_full |> dplyr::filter(dataset == "validation")
+
+# Filter out any NA to avoid error when running a Random Forest
+df_train <- df_train |> tidyr::drop_na()
+df_test <- df_test   |> tidyr::drop_na()
+
+# A little bit of verbose output:
+n_tot <- nrow(df_train) + nrow(df_test)
+
+perc_cal <- (nrow(df_train) / n_tot) |> round(2) * 100
+perc_val <- (nrow(df_test)  / n_tot) |> round(2) * 100
+
+cat("For model training, we have a calibration / validation split of: ",
+    perc_cal, "/", perc_val, "%")
+```
+
+```{r}
+# ranger() crashes when using tibbles, so we are using the
+# base R notation to enter the data
+rf_basic <- ranger::ranger( 
+  y = df_train[, target],     # target variable
+  x = df_train[, predictors_all], # Predictor variables
+  seed = 42,                    # Specify the seed for randomization to reproduce the same model again
+  num.threads = parallel::detectCores() - 1) # Use all but one CPU core for quick model training
+
+# Print a summary of fitted model
+print(rf_basic)
+```
+
+```{r}
+# Let's run the basic model again but with recording the variable importance
+rf_basic <- ranger::ranger( 
+  y = df_train[, target],     # target variable
+  x = df_train[, predictors_all],   # Predictor variables
+  importance   = "permutation", # Pick permutation to calculate variable importance
+  seed = 42,                    # Specify seed for randomization to reproduce the same model again
+  num.threads = parallel::detectCores() - 1) # Use all but one CPU core for quick model training
+
+# Extract the variable importance and create a long tibble
+vi_rf_basic <- rf_basic$variable.importance |>
+  dplyr::bind_rows() |> 
+  tidyr::pivot_longer(cols = dplyr::everything(), names_to = "variable")
+
+# Plot variable importance, ordered by decreasing value
+gg <- vi_rf_basic |> 
+  ggplot2::ggplot(ggplot2::aes(x = reorder(variable, value), y = value)) +
+  ggplot2::geom_bar(stat = "identity", fill = "grey50", width = 0.75) + 
+  ggplot2::labs(
+    y = "Change in OOB MSE after permutation", 
+    x = "",
+    title = "Variable importance based on OOB") +
+  ggplot2::theme_classic() +
+  ggplot2::coord_flip() + ggplot2::theme(axis.text.y = ggplot2::element_text(angle = 45, hjust = 1) )
+        
+vi_rf_basic
+# Display plot
+# gg
+```
+
+
+
+```{r}
+
+set.seed(42)
+
+# run the algorithm
+bor <- Boruta::Boruta(
+    y = df_train[, target],
+    x = df_train[, predictors_all],
+    maxRuns = 50, # Number of iterations. Set to 30 or lower if it takes too long
+    num.threads = parallel::detectCores()-1)
+
+# obtain results: a data frame with all variables, ordered by their importance
+df_bor <- Boruta::attStats(bor) |>
+  tibble::rownames_to_column() |>
+  dplyr::arrange(dplyr::desc(meanImp))
+
+# plot the importance result
+ggplot2::ggplot(ggplot2::aes(x = reorder(rowname, meanImp),
+                             y = meanImp,
+                             fill = decision),
+                data = df_bor) +
+  ggplot2::geom_bar(stat = "identity", width = 0.75) +
+  ggplot2::scale_fill_manual(values = c("grey30", "tomato", "grey70")) +
+  ggplot2::labs(
+    y = "Variable importance",
+    x = "",
+    title = "Variable importance based on Boruta") +
+  ggplot2::theme_classic() +
+  ggplot2::coord_flip()
+
+```
+
+```{r}
+# get retained important variables
+predictors_selected <- df_bor |>
+  dplyr::filter(decision == "Confirmed") |>
+  dplyr::pull(rowname)
+
+length(predictors_selected)
+```
+
+```{r}
+# re-train Random Forest model
+rf_bor <- ranger::ranger(
+  y = df_train[, target],              # target variable
+  x = df_train[, predictors_selected], # Predictor variables
+  seed = 42,                           # Specify the seed for randomization to reproduce the same model again
+  num.threads = parallel::detectCores() - 1) # Use all but one CPU core for quick model training
+
+# quick report and performance of trained model object
+rf_bor
+```
+
+```{r}
+# Save relevant data for model testing in the next chapter.
+saveRDS(rf_bor,                   
+      here::here("data/rf_for_wat.10.rds"))
+# 
+saveRDS(df_train[, c(target, predictors_selected)],
+  here::here("data/cal_for_wat.10.rds"))
+# 
+saveRDS(df_test[, c(target, predictors_selected)],
+   here::here("data/val_for_wat.10.rds"))
+
+saveRDS(rf_basic,                   
+   here::here("data/rf_wat.10.rds"))
+```
+
+
+# 4 Model Analysis
+
+```{r}
+# Load random forest model
+rf_bor   <- readRDS(here::here("data/rf_for_wat.10.rds"))
+df_train <- readRDS(here::here("data/cal_for_wat.10.rds"))
+df_test  <- readRDS(here::here("data/val_for_wat.10.rds"))
+```
+
+
+```{r}
+# Load area to be predicted
+raster_mask <- terra::rast(here::here("data/area_to_be_mapped.tif"))
+
+
+# Turn target raster into a dataframe, 1 px = 1 cell
+df_mask <- as.data.frame(raster_mask, xy = TRUE)
+
+# Filter only for area of interest
+df_mask <- df_mask |> 
+  dplyr::filter(area_to_be_mapped == 1)
+
+# Display df
+head(df_mask) |> 
+  knitr::kable()
+```
+
+
+```{r}
+files_covariates <- list.files(
+  path = here::here("data/covariates/"), 
+  pattern = ".tif$",
+  recursive = TRUE, 
+  full.names = TRUE
+  )
+
+```
+
+
+```{r}
+ random_files <- sample(files_covariates, 2)
+terra::rast(random_files[1])
+```
+
+```{r}
+# Filter that list only for the variables used in the RF
+preds_selected <- names(df_train[ ,predictors_selected])
+files_selected <- files_covariates[apply(sapply(X = preds_selected,
+                                            FUN = grepl,
+                                            files_covariates),
+                                     MARGIN =  1,
+                                     FUN = any)]
+
+# Load all rasters as a stack
+raster_covariates <- terra::rast(files_selected)
+```
+
+```{r}
+# Filter that list for all predictors
+preds_selected <- names(df_train[ ,predictors_selected]) 
+files_selected <- files_covariates[apply(sapply(X = preds_selected, 
+                                            FUN = grepl, 
+                                            files_covariates), 
+                                     MARGIN =  1, 
+                                     FUN = any)]
+
+# Load all rasters as a stack
+raster_covariates <- terra::rast(files_selected)
+
+```
+
+```{r}
+# Get coordinates for which we want data
+df_locations <- df_mask |> 
+  dplyr::select(x, y)
+
+# Extract data from covariate raster stack for all gridcells in the raster
+df_predict <- terra::extract(
+  raster_covariates,   # The raster we want to extract from
+  df_locations,        # A matrix of x and y values to extract for
+  ID = FALSE           # To not add a default ID column to the output
+  )
+
+df_predict <- cbind(df_locations, df_predict) |> 
+  tidyr::drop_na()  # Se_TWI2m has a small number of missing data
+```
+
+
+
+```{r}
+# Need to load {ranger} because ranger-object is used in predict()
+library(ranger) 
+
+# Make predictions for validation sites
+prediction <- predict(
+  rf_bor,           # RF model
+  data = df_test,   # Predictor data
+  num.threads = parallel::detectCores() - 1
+  )
+
+# Save predictions to validation df
+df_test$pred <- prediction$predictions
+```
+
+
+#confusion matrix template
+
+```{r}
+# Make classification predictions
+y <- as.factor(df_test$waterlog.100)
+x <- df_test$pred # Use 0.5 as threshold
+
+# Change class names
+levels(y) <- levels(x) <- c("no", "yes")
+
+# plot confusion matrix
+conf_matrix <- caret::confusionMatrix(data = x, reference = y)
+conf_matrix
+```
+
+
+```{r}
+
+# to calculate f1_score
+Metrics::f1(df_test$pred, as.factor(df_test$waterlog.100))
+
+```
+
+
+
+
+#making predictions
+```{r}
+
+# Make predictions using the RF model
+prediction <- predict(
+  rf_bor,              # RF model
+  data = df_predict,   
+  num.threads = parallel::detectCores() - 1
+  )
+
+
+# Attach predictions to dataframe and round them
+df_predict$prediction <- prediction$predictions
+```
+
+
+
+```{r}
+# Extract dataframe with coordinates and predictions
+df_map <- df_predict |>
+  dplyr::select(x, y, prediction)
+
+# Turn dataframe into a raster
+raster_pred <- terra::rast(
+  df_map,                  # Table to be transformed
+  crs = "+init=epsg:2056", # Swiss coordinate system
+  extent = terra::ext(raster_covariates) # Prescribe same extent as predictor rasters
+  )
+```
+
+
+```{r}
+# Let's have a look at our predictions!
+# To have some more flexibility, we can plot this in the ggplot-style as such:
+ggplot2::ggplot() +
+  tidyterra::geom_spatraster(data = raster_pred) +
+  ggplot2::scale_fill_viridis_c(
+    na.value = NA,
+    option = "viridis",
+    name = "pH"
+    ) +
+  ggplot2::theme_classic() +
+  ggplot2::scale_x_continuous(expand = c(0, 0)) +
+  ggplot2::scale_y_continuous(expand = c(0, 0)) +
+  ggplot2::labs(title = "Predicted waterlog at 100 cm depth, binary variable")
+```
+
+
+
+```{r}
+# Save raster as .tif file
+terra::writeRaster(
+  raster_pred,
+  "../data/ra_predicted_ph0-10.tif",
+  datatype = "FLT4S",  # FLT4S for floats, INT1U for integers (smaller file)
+  filetype = "GTiff",  # GeoTiff format
+  overwrite = TRUE     # Overwrite existing file
+)
+```
+
