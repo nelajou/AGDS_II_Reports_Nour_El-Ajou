@@ -1,0 +1,1176 @@
+---
+title: "soil_tutorial"
+author: "Nour El-Ajou"
+date: "2023-11-23"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+rm(list = ls())
+```
+
+# 1 Data download.
+
+
+```{r}
+library(tidyverse)
+
+sessionInfo()
+
+# Load soil data from sampling locations
+df_obs <- readr::read_csv(
+  here::here("data/berne_soil_sampling_locations.csv")
+)
+
+# Display data
+head(df_obs) |> 
+  knitr::kable()
+
+```
+
+# 5.1 Simple model
+
+Re-implement the digital soil mapping workflow, using Random Forest, as demonstrated in this tutorial, but for the binary categorical variable waterlog.100. Here are a few hints as a guide:
+
+Make sure that the categorical target variable is encoded as a factor using the function factor().
+
+Start with a model that includes all predictors, trained on the pre-defined training subset.
+
+Evaluate the model on the testing subset of the data
+
+Consider appropriate metrics as described in AGDS Book Chapter 8.3.
+
+Is the data balanced in terms of observed TRUE and FALSE values?
+
+
+
+What does this imply for the interpretation of the different metrics?
+
+## Raster files
+```{r}
+# Get a list with the path to all raster files
+list_raster <- list.files(
+  here::here("data/covariates"),
+  full.names = TRUE
+  )
+```
+
+
+```{r}
+# Display data (lapply to clean names)
+lapply(
+  list_raster, 
+  function(x) sub(".*/(.*)", "\\1", x)
+  ) |> 
+  unlist() |> 
+  head(5) |> 
+  print()
+```
+
+
+```{r}
+# Load a raster file as example: Picking the slope profile at 2 m resolution
+raster_example <- terra::rast(
+  here::here("data/covariates/Se_slope2m.tif")
+  )
+raster_example
+```
+
+```{r}
+# Load all files as one batch
+all_rasters <- terra::rast(list_raster)
+all_rasters
+```
+## assemble full dataset
+```{r}
+# Extract coordinates from sampling locations
+sampling_xy <- df_obs |> 
+  dplyr::select(x, y)
+
+# From all rasters, extract values for sampling coordinates
+df_covars <- terra::extract(
+  all_rasters,  # The raster we want to extract from
+  sampling_xy,  # A matrix of x and y values to extract for
+  ID = FALSE    # To not add a default ID column to the output
+  )
+
+df_full <- cbind(df_obs, df_covars)
+
+head(df_full) |> 
+  knitr::kable() 
+```
+
+```{r}
+vars_categorical <- df_covars |> 
+  
+  # Get number of distinct values per variable
+  dplyr::summarise(dplyr::across(dplyr::everything(), ~dplyr::n_distinct(.))) |> 
+  
+  # Turn df into long format for easy filtering
+  tidyr::pivot_longer(
+    dplyr::everything(), 
+    names_to = "variable", 
+    values_to = "n"
+    ) |> 
+  
+  # Filter out variables with 10 or less distinct values
+  dplyr::filter(n <= 10) |>
+  
+  # Extract the names of these variables
+  dplyr::pull('variable')
+
+cat("Variables with less than 10 distinct values:", 
+    ifelse(length(vars_categorical) == 0, "none", vars_categorical))
+```
+
+```{r}
+df_full <- df_full |> 
+  dplyr::mutate(dplyr::across(all_of(vars_categorical), ~as.factor(.)))
+```
+
+
+## missing values
+
+```{r}
+# Get number of rows to calculate percentages
+n_rows <- nrow(df_full)
+
+# Get number of distinct values per variable
+df_full |> 
+  dplyr::summarise(dplyr::across(dplyr::everything(), 
+                                 ~ length(.) - sum(is.na(.)))) |> 
+  tidyr::pivot_longer(dplyr::everything(), 
+                      names_to = "variable", 
+                      values_to = "n") |>
+  dplyr::mutate(perc_available = round(n / n_rows * 100)) |> 
+  dplyr::arrange(perc_available) |> 
+  head(10) |> 
+  knitr::kable()
+```
+
+```{r}
+df_full |> 
+  dplyr::select(1:20) |>   # reduce data for readability of the plot
+  visdat::vis_miss()
+```
+
+
+```{r}
+# if (!dir.exists(here::here("data"))) system(paste0("mkdir ", here::here("data")))
+# saveRDS(df_full, 
+        # here::here("data/df_full.rds"))
+```
+
+
+# 2 Train a random forest
+
+## Definition of Targets and Predictors
+```{r}
+df_full <- readRDS(here::here("data/df_full.rds"))
+
+head(df_full) |> 
+  knitr::kable()
+```
+
+```{r}
+# Specify target: The pH in the top 10cm
+target <- "waterlog.100"
+df_full <- subset(df_full, select = - c(vszone) )
+
+# Specify predictors_all: Remove soil sampling and observational data
+predictors_all <- names(df_full)[14:ncol(df_full)]
+
+
+cat("The target is:", target,
+    "\nThe predictors_all are:", paste0(predictors_all[1:8], sep = ", "), "...")
+```
+## Training and Test Dataset
+
+```{r}
+df_full$waterlog.100 <- as.factor(df_full$waterlog.100)
+
+# Split dataset into training and testing sets
+df_train <- df_full |> dplyr::filter(dataset == "calibration")
+df_test  <- df_full |> dplyr::filter(dataset == "validation")
+
+# Filter out any NA to avoid error when running a Random Forest
+df_train <- df_train |> tidyr::drop_na()
+df_test <- df_test   |> tidyr::drop_na()
+
+# A little bit of verbose output:
+n_tot <- nrow(df_train) + nrow(df_test)
+
+perc_cal <- (nrow(df_train) / n_tot) |> round(2) * 100
+perc_val <- (nrow(df_test)  / n_tot) |> round(2) * 100
+
+cat("For model training, we have a calibration / validation split of: ",
+    perc_cal, "/", perc_val, "%")
+```
+## Train basic forest
+
+```{r}
+# ranger() crashes when using tibbles, so we are using the
+# base R notation to enter the data
+rf_basic <- ranger::ranger( 
+  y = df_train[, target],     # target variable
+  x = df_train[, predictors_all], # Predictor variables
+  seed = 42,                    # Specify the seed for randomization to reproduce the same model again
+  num.threads = parallel::detectCores() - 1) # Use all but one CPU core for quick model training
+
+# Print a summary of fitted model
+print(rf_basic)
+```
+### Variable importance basic model
+```{r}
+# Let's run the basic model again but with recording the variable importance
+rf_basic <- ranger::ranger( 
+  y = df_train[, target],     # target variable
+  x = df_train[, predictors_all],   # Predictor variables
+  importance   = "permutation", # Pick permutation to calculate variable importance
+  seed = 42,                    # Specify seed for randomization to reproduce the same model again
+  num.threads = parallel::detectCores() - 1) # Use all but one CPU core for quick model training
+
+# Extract the variable importance and create a long tibble
+vi_rf_basic <- rf_basic$variable.importance |>
+  dplyr::bind_rows() |> 
+  tidyr::pivot_longer(cols = dplyr::everything(), names_to = "variable")
+
+# Plot variable importance, ordered by decreasing value
+gg <- vi_rf_basic |> 
+  ggplot2::ggplot(ggplot2::aes(x = reorder(variable, value), y = value)) +
+  ggplot2::geom_bar(stat = "identity", fill = "grey50", width = 0.75) + 
+  ggplot2::labs(
+    y = "Change in OOB MSE after permutation", 
+    x = "",
+    title = "Variable importance based on OOB") +
+  ggplot2::theme_classic() +
+  ggplot2::coord_flip() + ggplot2::theme(axis.text.y = ggplot2::element_text(angle = 45, hjust = 1) )
+        
+vi_rf_basic
+# Display plot
+# gg
+```
+
+##  3 Run Boruta Algorithm
+
+```{r}
+
+set.seed(42)
+
+# run the algorithm
+bor <- Boruta::Boruta(
+    y = df_train[, target],
+    x = df_train[, predictors_all],
+    maxRuns = 50, # Number of iterations. Set to 30 or lower if it takes too long
+    num.threads = parallel::detectCores()-1)
+
+# obtain results: a data frame with all variables, ordered by their importance
+df_bor <- Boruta::attStats(bor) |>
+  tibble::rownames_to_column() |>
+  dplyr::arrange(dplyr::desc(meanImp))
+
+# plot the importance result
+ggplot2::ggplot(ggplot2::aes(x = reorder(rowname, meanImp),
+                             y = meanImp,
+                             fill = decision),
+                data = df_bor) +
+  ggplot2::geom_bar(stat = "identity", width = 0.75) +
+  ggplot2::scale_fill_manual(values = c("grey30", "tomato", "grey70")) +
+  ggplot2::labs(
+    y = "Variable importance",
+    x = "",
+    title = "Variable importance based on Boruta") +
+  ggplot2::theme_classic() +
+  ggplot2::coord_flip()
+
+```
+## retrain RF with Boruta Selection
+```{r}
+# get retained important variables
+predictors_selected <- df_bor |>
+  dplyr::filter(decision == "Confirmed") |>
+  dplyr::pull(rowname)
+
+length(predictors_selected)
+```
+
+```{r}
+# re-train Random Forest model
+rf_bor <- ranger::ranger(
+  y = df_train[, target],              # target variable
+  x = df_train[, predictors_selected], # Predictor variables
+  seed = 42,                           # Specify the seed for randomization to reproduce the same model again
+  num.threads = parallel::detectCores() - 1) # Use all but one CPU core for quick model training
+
+# quick report and performance of trained model object
+rf_bor
+```
+# Save forests and Datasets
+```{r}
+# Save relevant data for model testing in the next chapter.
+
+saveRDS(rf_bor,                   
+      here::here("data/rf_bor_wat.10.rds"))
+
+saveRDS(df_train[, c(target, predictors_selected)],
+  here::here("data/cal_bor_wat.10.rds"))
+ 
+saveRDS(df_test[, c(target, predictors_selected)],
+   here::here("data/val_bor_wat.10.rds"))
+
+
+
+saveRDS(rf_basic,                   
+   here::here("data/rf_wat.10.rds"))
+
+saveRDS(df_train[, c(target, predictors_all)],
+  here::here("data/cal_wat.10.rds"))
+ 
+saveRDS(df_test[, c(target, predictors_all)],
+   here::here("data/val_wat.10.rds"))
+
+```
+
+
+# 4 Model Analysis
+
+
+## Load Data, Forests and Prediction Area
+```{r}
+# Load random forest model
+rf_bor   <- readRDS(here::here("data/rf_bor_wat.10.rds"))
+df_train_bor <- readRDS(here::here("data/cal_bor_wat.10.rds"))
+df_test_bor  <- readRDS(here::here("data/val_bor_wat.10.rds"))
+
+
+rf_basic <- readRDS(here::here("data/rf_wat.10.rds"))
+df_train <- readRDS(here::here("data/cal_wat.10.rds"))
+df_test  <- readRDS(here::here("data/val_wat.10.rds"))
+
+```
+
+
+```{r}
+# Load area to be predicted
+raster_mask <- terra::rast(here::here("data/area_to_be_mapped.tif"))
+
+
+# Turn target raster into a dataframe, 1 px = 1 cell
+df_mask <- as.data.frame(raster_mask, xy = TRUE)
+
+# Filter only for area of interest
+df_mask <- df_mask |> 
+  dplyr::filter(area_to_be_mapped == 1)
+
+# Display df
+head(df_mask) |> 
+  knitr::kable()
+```
+
+
+```{r}
+files_covariates <- list.files(
+  path = here::here("data/covariates/"), 
+  pattern = ".tif$",
+  recursive = TRUE, 
+  full.names = TRUE
+  )
+
+```
+
+
+```{r}
+ random_files <- sample(files_covariates, 2)
+terra::rast(random_files[1])
+```
+## Select Raster and covariates - basic Forest
+
+```{r}
+# Filter that list only for the variables used in the RF
+preds_selected <- names(df_train[ ,predictors_all])
+files_selected <- files_covariates[apply(sapply(X = preds_selected,
+                                            FUN = grepl,
+                                            files_covariates),
+                                     MARGIN =  1,
+                                     FUN = any)]
+
+# Load all rasters as a stack
+raster_covariates <- terra::rast(files_selected)
+
+```
+
+
+
+## Select Raster and covariates - Boruta Forest
+```{r}
+# Filter that list only for the variables used in the RF
+preds_selected_bor <- names(df_train[ ,predictors_selected])
+files_selected_bor <- files_covariates[apply(sapply(X = preds_selected_bor,
+                                            FUN = grepl,
+                                            files_covariates),
+                                     MARGIN =  1,
+                                     FUN = any)]
+
+# Load all rasters as a stack
+raster_covariates_bor <- terra::rast(files_selected_bor)
+```
+
+
+## Get coordinates for covariates - Basic Forest
+```{r}
+# Get coordinates for which we want data
+df_locations <- df_mask |> 
+  dplyr::select(x, y)
+
+# Extract data from covariate raster stack for all gridcells in the raster
+df_predict <- terra::extract(
+  raster_covariates,   # The raster we want to extract from
+  df_locations,        # A matrix of x and y values to extract for
+  ID = FALSE           # To not add a default ID column to the output
+  )
+
+df_predict <- cbind(df_locations, df_predict) |> 
+  tidyr::drop_na()  # Se_TWI2m has a small number of missing data
+```
+
+
+
+## Get coordinates for covariates - Boruta Forest
+```{r}
+# Get coordinates for which we want data
+df_locations <- df_mask |> 
+  dplyr::select(x, y)
+
+# Extract data from covariate raster stack for all gridcells in the raster
+df_predict_bor <- terra::extract(
+  raster_covariates_bor,   # The raster we want to extract from
+  df_locations,        # A matrix of x and y values to extract for
+  ID = FALSE           # To not add a default ID column to the output
+  )
+
+df_predict_bor <- cbind(df_locations, df_predict_bor) |> 
+  tidyr::drop_na()  # Se_TWI2m has a small number of missing data
+```
+
+## Generate prediction and add it to test-set - Basic Forest
+```{r}
+# Need to load {ranger} because ranger-object is used in predict()
+library(ranger) 
+
+# Make predictions for validation sites
+prediction <- predict(
+  rf_basic,           # RF model
+  data = df_test,   # Predictor data
+  num.threads = parallel::detectCores() - 1
+  )
+
+# Save predictions to validation df
+df_test$pred <- prediction$predictions
+```
+
+
+
+## Generate prediction and add it to test-set - Boruta Forest
+```{r}
+ # Need to load {ranger} because ranger-object is used in predict()
+library(ranger) 
+ 
+ # Make predictions for validation sites
+ prediction_bor <- predict(
+   rf_bor,           # RF model
+   data = df_test_bor,   # Predictor data
+   num.threads = parallel::detectCores() - 1
+   )
+
+# Save predictions to validation df
+ df_test_bor$pred <- prediction_bor$predictions
+```
+
+
+
+##  predictions with Prediction set - Basic Forest
+
+```{r}
+
+
+# Make predictions using the RF model
+prediction <- predict(
+  rf_basic,              # RF model
+  data = df_predict,   
+  num.threads = parallel::detectCores() - 1
+  )
+
+
+# Attach predictions to dataframe and round them
+df_predict$prediction <- prediction$predictions
+```
+
+##  predictions with Prediction set - Boruta Forest
+```{r}
+
+
+# Make predictions using the RF model
+prediction_bor <- predict(
+  rf_bor,              # RF model
+  data = df_predict_bor,   
+  num.threads = parallel::detectCores() - 1
+  )
+
+
+# Attach predictions to dataframe and round them
+df_predict_bor$prediction <- prediction_bor$predictions
+```
+
+
+## Extract data frame and raster transformation - Basic Forest
+```{r}
+# Extract dataframe with coordinates and predictions
+df_map <- df_predict |>
+  dplyr::select(x, y, prediction)
+
+# Turn dataframe into a raster
+raster_pred <- terra::rast(
+  df_map,                  # Table to be transformed
+  crs = "+init=epsg:2056", # Swiss coordinate system
+  extent = terra::ext(raster_covariates) # Prescribe same extent as predictor rasters
+  )
+```
+
+## Extract data frame and raster transformation - Boruta Forest
+
+```{r}
+# Extract dataframe with coordinates and predictions
+df_map_bor <- df_predict_bor|>
+  dplyr::select(x, y, prediction)
+
+# Turn dataframe into a raster
+raster_pred_bor <- terra::rast(
+  df_map_bor,                  # Table to be transformed
+  crs = "+init=epsg:2056", # Swiss coordinate system
+  extent = terra::ext(raster_covariates_bor) # Prescribe same extent as predictor ras
+  )
+
+```
+
+## Plot Prediction map - Basic Forest
+
+```{r}
+# Let's have a look at our predictions!
+# To have some more flexibility, we can plot this in the ggplot-style as such:
+ggplot2::ggplot() +
+  tidyterra::geom_spatraster(data = raster_pred) +
+  ggplot2::scale_fill_viridis_c(
+    na.value = NA,
+    option = "viridis",
+    name = "pH"
+    ) +
+  ggplot2::theme_classic() +
+  ggplot2::scale_x_continuous(expand = c(0, 0)) +
+  ggplot2::scale_y_continuous(expand = c(0, 0)) +
+  ggplot2::labs(title = "Predicted waterlog at 100 cm depth, binary variable")
+```
+## Plot Prediction map - Boruta Forest
+
+```{r}
+# Let's have a look at our predictions!
+# To have some more flexibility, we can plot this in the ggplot-style as such:
+ggplot2::ggplot() +
+  tidyterra::geom_spatraster(data = raster_pred_bor) +
+  ggplot2::scale_fill_viridis_c(
+    na.value = NA,
+    option = "viridis",
+    name = "pH"
+    ) +
+  ggplot2::theme_classic() +
+  ggplot2::scale_x_continuous(expand = c(0, 0)) +
+  ggplot2::scale_y_continuous(expand = c(0, 0)) +
+  ggplot2::labs(title = "Predicted waterlog at 100 cm depth, binary variable")
+```
+
+
+```{r}
+# Save raster as .tif file
+terra::writeRaster(
+  raster_pred,
+  "../data/ra_predicted_ph0-10.tif",
+  datatype = "FLT4S",  # FLT4S for floats, INT1U for integers (smaller file)
+  filetype = "GTiff",  # GeoTiff format
+  overwrite = TRUE     # Overwrite existing file
+)
+
+
+
+
+terra::writeRaster(
+  raster_pred_bor,
+  "../data/ra_predicted_bor_ph0-10.tif",
+  datatype = "FLT4S",  # FLT4S for floats, INT1U for integers (smaller file)
+  filetype = "GTiff",  # GeoTiff format
+  overwrite = TRUE     # Overwrite existing file
+)
+
+
+```
+
+
+```{r}
+summary(df_predict$prediction == df_predict_bor$prediction)
+``` 
+
+# 5 Diagnosis and confusion matrices
+
+#confusion matrix - basic case 
+
+```{r}
+# Make classification predictions
+y <- as.factor(df_test$waterlog.100)
+x <- df_test$pred # Use 0.5 as threshold
+
+# Change class names
+levels(y) <- levels(x) <- c("no", "yes")
+
+# plot confusion matrix
+conf_matrix <- caret::confusionMatrix(data = x, reference = y)
+conf_matrix
+```
+
+## Confusion matrix - boruta Forest
+
+```{r}
+# Make classification predictions
+y_bor <- as.factor(df_test_bor$waterlog.100)
+x_bor <- df_test_bor$pred # Use 0.5 as threshold
+
+# Change class names
+levels(y_bor) <- levels(x_bor) <- c("no", "yes")
+
+# plot confusion matrix
+conf_matrix_bor <- caret::confusionMatrix(data = x_bor, reference = y_bor)
+conf_matrix_bor
+```
+
+# OBB
+```{r}
+# OOB prediction error of the final model
+sqrt(rf_basic$prediction.error)
+sqrt(rf_bor$prediction.error)
+```
+
+
+
+
+5.3 Model optimization
+
+In AGDS Book Chapter 11, you learned how to optimize hyperparameters using cross-validation.
+
+5.3.1
+Using the training data subset, implement a 5-fold cross-validation to optimise the hyperparameters mtry and min.node.size of the same Random Forest model as implemented above. You may use the {caret} library as demonstrated in AGDS Book.
+
+5.3.2
+Evaluate the optimized model on the test set using the same metrics as considered above. Does the model generalise better to unseen data than the initial model (which used default hyperparameters, see ?ranger::ranger).
+
+
+
+
+## 5.3.1 Hyperparameter tuning 
+
+### Define m^possible values for mtry and min. node size
+```{r}
+# ranger
+ mtry_values <- seq(2,40,2)
+min.node.size_values <- c(2, 5, 10, 20,30,40,50,60,70,80,90,100)
+```
+
+
+
+
+### search optimal value for mtry
+```{r}
+results_1 <- c()   # initialise results
+set.seed(1997)   # for reproducibility
+
+
+for (mtry_value in mtry_values){
+rf_basic <- ranger::ranger( 
+  y = df_train[, target],     # target variable
+  x = df_train[, predictors_all], # Predictor variables
+  seed = 42,                    # Specify the seed for randomization to reproduce the same model again
+  num.threads = parallel::detectCores() - 1  # Use all but one CPU core for quick model training
+,
+  mtry = mtry_value  ,
+  min.node.size = 5  ,
+  replace = FALSE,
+    sample.fraction = 0.5,
+    num.trees = 100,
+    ) 
+
+  results_1 <- rbind(results_1, rf_basic)
+
+}
+
+
+results_1 <- as.data.frame(results_1)
+```
+
+
+### verbalize mtry result
+```{r}
+cat(" It seems like tree number ", 
+    which(unlist( results_1$prediction.error) == min(unlist( results_1$prediction.error) )   ) , 
+    "with mtry = ",
+     unlist(results_1[which(unlist( results_1$prediction.error) == min(unlist( results_1$prediction.error) )   ),"mtry"] ) ,
+    
+    "returns the smallest prediction error being", min(unlist( results_1$prediction.error) )  )
+```
+```{r}
+# results[which(unlist( results$prediction.error) == min(unlist( results$prediction.error) )   ), unlist("mtry")]
+```
+
+
+
+### Search optimal value for min. node size
+```{r}
+results_2 <- c()   # initialise results
+set.seed(1997)   # for reproducibility
+
+
+for (min.node.size_value in min.node.size_values){
+rf_basic <- ranger::ranger( 
+  y = df_train[, target],     # target variable
+  x = df_train[, predictors_all], # Predictor variables
+  seed = 42,                    # Specify the seed for randomization to reproduce the same model again
+  num.threads = parallel::detectCores() - 1  # Use all but one CPU core for quick model training
+, 
+  mtry = 10,
+  min.node.size = min.node.size_value  ,
+  replace = FALSE,
+    sample.fraction = 0.5,
+    num.trees = 100,
+    ) 
+
+  results_2 <- rbind(results_2, rf_basic)
+
+}
+
+results_2 <- as.data.frame(results_2)
+# results_2
+```
+
+### verbalize min. node size result
+```{r}
+cat(" It seems like tree number ", 
+    which(unlist( results_2$prediction.error) == min(unlist( results_2$prediction.error) )   ) , 
+    "with min.node size = ",unlist(results_2$min.node.size[which.min(results_2$prediction.error)] )
+ ,
+    "returns the smallest prediction error being", min(unlist( results_2$prediction.error) )  )
+```
+#5.3.2 Evaluation of tuned vs. untuned model.
+
+
+
+
+
+# 5.4 Probabilistic predictions
+
+## 5.4.1
+Using the optimised (or if you didn’t manage - the initial default) hyperparameters, train the Random Forest model, setting ranger::ranger(..., probability = TRUE).
+
+
+This yields not a model predicting a binary class, but a probability of the target to be TRUE. This lets the user chose where to put the threshold for translating a probability to a binary class. E.g., if the predicted probability is > 0.5
+, then consider this as a prediction of TRUE. 
+
+### RF_bor_prob
+```{r}
+# re-train Random Forest model
+rf_bor_prob <- ranger::ranger(
+  y = df_train[, target],              # target variable
+  x = df_train[, predictors_selected], # Predictor variables
+  seed = 42,                           # Specify the seed for randomization to reproduce the same model again
+  num.threads = parallel::detectCores() - 1,
+  probability = TRUE ) # Use all but one CPU core for quick model training
+
+
+```
+
+
+## Generate prediction and add it to test-set - Boruta Forest
+```{r}
+# Need to load {ranger} because ranger-object is used in predict()
+library(ranger) 
+ 
+ # Make predictions for validation sites
+ prediction_bor_prob <- predict(
+   rf_bor_prob,           # RF model
+   data = df_test_bor,   # Predictor data
+   num.threads = parallel::detectCores() - 1
+   )
+
+# Save predictions to validation df
+ df_test_bor_prob <- df_test_bor
+ df_test_bor_prob$pred <- prediction_bor_prob$predictions
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+```{r}
+df_treshhold <- as.data.frame(cbind( 
+  "waterlog.100" = as.numeric( as.character( df_test_bor_prob$waterlog.100 ) ), "P(waterlog = 1)" =   df_test_bor_prob$pred_prob[,2]) )
+
+ treshholds  <-  (seq(from = 1, to = 0, -0.01) )
+ 
+ 
+true_pos <- rep(NA,length(treshholds))
+false_pos <- rep(NA,length(treshholds))
+all_pos <- rep(NA,length(treshholds))
+```
+
+
+```{r}
+for(i in 1:length(treshholds) ){
+
+df_treshhold$try <- df_treshhold$`P(waterlog = 1)`
+
+df_treshhold$try[df_treshhold$try >= treshholds[i]] <- 1
+df_treshhold$try[df_treshhold$try < treshholds[i]] <- 0
+
+
+# Make classification predictions
+y_bor <- as.factor(df_treshhold$waterlog.100)
+x_bor <- as.factor(df_treshhold$try) # Use 0.5 as threshold
+
+# Change class names
+levels(y_bor) <- levels(x_bor) <- c("yes", "no")
+
+# plot confusion matrix
+conf_matrix_bor <- caret::confusionMatrix(data = x_bor, reference = y_bor)
+conf_matrix_bor$table
+
+# true positive rate
+true_pos[i] <- conf_matrix_bor$table[2,2]
+# False positive rate
+false_pos[i] <- conf_matrix_bor$table[2,1]
+all_pos[i] <- true_pos[i] + false_pos[i]
+}
+```
+
+ROC Plot
+```{r}
+true_pos_rate <- true_pos / all_pos
+false_pos_rate <- false_pos / all_pos
+plot(false_pos_rate, true_pos_rate, col = "black", type = "p", main = "ROC Curve", xlab = "False positive Rate", ylab = "True positive Rate", xlim = c(0,1), ylim = c(0,1) )
+```
+
+```{r}
+true_pos_rate
+false_pos_rate
+```
+
+test part
+```{r}
+
+df_treshhold$try <- df_treshhold$`P(waterlog = 1)`
+
+df_treshhold$try[df_treshhold$try >= 0] <- 1
+df_treshhold$try[df_treshhold$try < 0] <- 0
+
+
+# Make classification predictions
+y_bor <- as.factor(df_treshhold$waterlog.100)
+x_bor <- as.factor(df_treshhold$try) # Use 0.5 as threshold
+
+# Change class names
+levels(y_bor) <- levels(x_bor) <- c("yes", "no")
+
+# plot confusion matrix
+conf_matrix_bor <- caret::confusionMatrix(data = x_bor, reference = y_bor)
+conf_matrix_bor$table
+
+# true positive rate
+conf_matrix_bor$table[2,2]
+# False positive rate
+ conf_matrix_bor$table[2,1]
+
+```
+
+### Establish the Reicever-operating-characteristic curve, as described in AGDS Book Chapter 8.3.
+
+
+
+## 5.4.2
+
+Consider you inform an infrastructure construction project where waterlogged soils severely jeopardize the stability of the building. Then, consider you inform a project where waterlogged soils are unwanted, but not critical. In both cases, your prediction map of a binary classification is used as a basis and the binary classification is derived from the probabilistic prediction.
+
+
+### How would you chose the threshold in each case?
+
+- analyse the weird graph
+
+
+### Would you chose the same threshold in both cases? If not, explain why. 
+
+
+I would not chose the same treshhold in both cases because in the first example, false negatives are to be avoided as much as possible. In the second example on the other hand, they are not that critical and we can try to strike a balance in minimizing both, false positivs and false negatives. 
+
+
+### Can you think of an analogy of a similarly-natured problem in another realm?
+
+An analogy would be the testing of new drugs:
+
+While testing a new drug for a serious disease, e.g. cancer, we want to minimize
+Type I Errors, while Type II Errors are not very crucial. I.e. we only want to measure the effect of the drug given it exists (minimize false positives) and we accept,rejecting the use of the drug in some cases, event though it could help (we have more false negatives in return)
+
+The other case would be the assesment of side effects of a new drug.
+
+In that case we want to minimize false negatives, meaning we don't want any cases were we don't claim there are serious side-effect, even though they exist. At the same time we take into account that their will be more false positives, meaning cases were we predict side effects to occur, even though that won't be the case. 
+
+
+# To dos:
+
+- Check out in the end, you really need df_predicts, for boruta and normal
+- is the validation really 5 fold cross?
+- change scale of the maps (binary, not gradual)
+
+
+- Evaluate the model on the testing subset of the data. Consider appropriate metrics as described in AGDS Book Chapter 8.3. Is the data balanced in terms of observed TRUE and FALSE values? What does this imply for the interpretation of the different metrics?
+
+# questions for class
+
+what could be problem for vmnet?
+- hyper parameter tuning, approach
+
+
+
+
+
+
+```{r}
+# Display the results
+print(results)
+
+# Identify the best model
+best_mtry <- results[which.min(results$RMSE), "mtry"]
+best_model <- ranger::ranger(
+  y = df_train[, target],
+  x = df_train[, predictors_all],
+  mtry = best_mtry,
+  num.trees = 100,
+  seed = 42,
+  num.threads = parallel::detectCores() - 1
+)
+
+# Print a summary of the best model
+print(summary(best_model))
+
+# Compare with the basic model
+rf_basic <- ranger::ranger(
+  y = df_train[, target],
+  x = df_train[, predictors_all],
+  seed = 42,
+  num.threads = parallel::detectCores() - 1
+)
+
+# Print a summary of the basic model
+print(summary(rf_basic))
+
+
+
+```
+
+```{r}
+# Directly fit the model again, with same data and model formulation
+# Now train with 1000 trees and maximum depth 4
+```
+
+
+
+# pp approach
+
+```{r}
+# The same model formulation is in the previous chapter
+pred_plus <- paste(predictors_all,collapse  = " + ")
+pp <- recipes::recipe(as.formula(paste0("waterlog.100 ~", pred_plus)), 
+                      data = df_train) 
+```
+
+```{r}
+ mtry_values <- seq(2,40,2)
+min.node.size_values <- c(2, 5, 10, 20,30,40,50,60,70,80,90,100)
+```
+
+
+
+```{r}
+# Load required libraries
+library(caret)
+library(ranger)
+
+# Set seed for reproducibility
+set.seed(1997)
+
+# Define the hyperparameter grid
+mtry_values <- c(2, 4, 6, 8)  # Example values, adjust as needed
+
+# Create a data frame to store results
+results <- data.frame()
+
+# Perform hyperparameter tuning with 5-fold cross-validation
+
+  # Train the model using caret::train for classification
+  mod <- caret::train(
+    x = df_train[, predictors_all],
+    y = df_train[, target],
+    method = "ranger",
+    metric = "Prediction Error",
+    trControl = trainControl(
+      method = "cv",
+      number = 5,
+      savePredictions = "final"
+    ),
+    tuneGrid = expand.grid(
+      .mtry = mtry_values,
+      .min.node.size = min.node.size_values,
+      .splitrule = "gini"  # or "extratrees" or "entropy", depending on your preference
+    ),
+    replace = FALSE,
+    sample.fraction = 0.5,
+    num.trees = 100,
+    seed = 1982
+  )
+mod$
+
+  # Store the results
+  results <- rbind(results, data.frame(mtry = mtry_value, min.node.size = min.node.size_value, Accuracy = mod$results$Accuracy))
+
+
+# Display the results
+print(results)
+
+```
+
+
+
+```{r}
+# Set seed for reproducibility
+set.seed(1997)
+
+# Define the hyperparameter grid
+min.node.size_values <- c(2, 4, 6, 8)  # Example values, adjust as needed
+
+# Create a data frame to store results
+results <- data.frame()
+
+# Perform hyperparameter tuning with 5-fold cross-validation
+for (min.node.size in min.node.size_values) {
+  # Train the model using caret::train for classification
+  mod <- caret::train(
+    x = df_train[, predictors_all],
+    y = df_train[, target],
+    method = "ranger",
+    metric = "Prediction Error",
+    trControl = trainControl(
+      method = "cv",
+      number = 5,
+      savePredictions = "final"
+    ),
+    tuneGrid = expand.grid(
+      .mtry = mtry_value,
+      .min.node.size = min.node.size,
+      .splitrule = "gini"  # or "extratrees" or "entropy", depending on your preference
+    ),
+    replace = FALSE,
+    sample.fraction = 0.5,
+    num.trees = 100,
+    seed = 1982
+  )
+
+  # Store the results
+  results <- rbind(results, data.frame(mtry = mtry_value, Accuracy = mod$results$Accuracy))
+}
+
+# Display the results
+print(results)
+
+```
+
+# Backup 
+
+# Load required libraries
+library(caret)
+library(ranger)
+
+# Set seed for reproducibility
+set.seed(1997)
+
+# Define the hyperparameter grid
+mtry_values <- c(2, 4, 6, 8)  # Example values, adjust as needed
+
+# Create a data frame to store results
+results <- data.frame()
+
+# Perform hyperparameter tuning with 5-fold cross-validation
+for (mtry_value in mtry_values) {
+  # Train the model using caret::train for classification
+  mod <- caret::train(
+    x = df_train[, predictors_all],
+    y = df_train[, target],
+    method = "ranger",
+    metric = "Prediction Error",
+    trControl = trainControl(
+      method = "cv",
+      number = 5,
+      savePredictions = "final"
+    ),
+    tuneGrid = expand.grid(
+      .mtry = mtry_values,
+      .min.node.size = min.node.size_values,
+      .splitrule = "gini"  # or "extratrees" or "entropy", depending on your preference
+    ),
+    replace = FALSE,
+    sample.fraction = 0.5,
+    num.trees = 100,
+    seed = 1982
+  )
+
+  # Store the results
+  results <- rbind(results, data.frame(mtry = mtry_value, Accuracy = mod$results$Accuracy))
+}
+
+# Display the results
+print(results)
+
+
+
+
+```{r}
+# 
+#  fill <- as.data.frame( rep(df_treshhold[,2], 201 ) , colnames = treshholds )
+#  colnames(fill) <- treshholds
+# 
+ 
+ # df_fill <- as.data.frame(cbind(df_treshhold, fill) )
+```
+
+
+```{r}
+# for(i in 1: (ncol(df_fill)-2 ) ){
+#   df_fill[,i+2] > treshholds[i] <- 1
+#   df_fill[,i+2] <= treshholds[i] <- 0
+# }
+
+```
+```{r}
+df_fill[,1+2] > treshholds[1] <- 1
+```
+
+```
