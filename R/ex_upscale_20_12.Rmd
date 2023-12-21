@@ -56,7 +56,7 @@ Report the mean RMSE and R
 ```{r, echo = FALSE}
 library(tidyverse)
 
-list.of.packages <- c("ggplot2","skimr", "tidyverse", "caret", "OneR", "dplyr", "kableExtra")
+list.of.packages <- c("ggplot2","skimr", "tidyverse", "caret", "OneR", "dplyr", "kableExtra", "visdat")
 new.packages <- list.of.packages[!(list.of.packages %in% installed.packages()[,"Package"])]
 if(length(new.packages)) install.packages(new.packages)
 lapply(list.of.packages, library, character.only=TRUE)
@@ -354,6 +354,9 @@ output <- purrr::map2_dfr(
 
 print(output)
 ```
+```{r}
+print(mean(output$rmse))
+```
 
 
 Compare the results of the spatial cross-validation to the results of the random cross-validation and discuss reasons for why you observe a difference in the cross-validation metrics (if you do).
@@ -371,6 +374,9 @@ Compare the results of the environmental cross-validation to the results of the 
 
 
 ```{r, echo = FALSE}
+
+dfs$map <- (dfs$map-mean(dfs$map) )/sd(dfs$map)
+dfs$mat <- (dfs$mat-mean(dfs$mat) )/sd(dfs$mat)
 clusters_env <- kmeans(
   dfs |> dplyr::select(map, mat),
   centers = 5
@@ -462,6 +468,11 @@ output_env <- purrr::map2_dfr(
 output_env
 
 ```
+```{r}
+print(mean(output_env$rmse))
+```
+
+
 ```{r}
 n_cluster_geo <- table(dfs$cluster)
 n_cluster_env <- table(dfs$cluster_env)

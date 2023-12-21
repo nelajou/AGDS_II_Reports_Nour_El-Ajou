@@ -354,9 +354,11 @@ raster_pred <- terra::rast(
 
 ```{r}
 raster_pred_plot <- terra::as.factor(raster_pred)
+raster_pred_plot_df <- terra::as.data.frame(raster_pred_plot)
+
 # Let's have a look at our predictions!
 # To have some more flexibility, we can plot this in the ggplot-style as such:
-ggplot2::ggplot(raster_pred_plot) +
+ggplot2::ggplot(raster_pred_plot_df) +
   tidyterra::geom_spatraster(data = raster_pred_plot) +
   ggplot2::scale_fill_viridis_d(
     na.value = NA,
@@ -695,9 +697,10 @@ raster_pred_bor <- terra::rast(
 # Let's have a look at our predictions!
 # To have some more flexibility, we can plot this in the ggplot-style as such:
 raster_pred_bor_plot <- terra::as.factor(raster_pred_bor)
+raster_pred_bor_plot_df <- terra::as.data.frame(raster_pred_bor_plot)
 
 
-ggplot2::ggplot(raster_pred_bor_plot) +
+ggplot2::ggplot(raster_pred_bor_plot_df) +
   tidyterra::geom_spatraster(data = raster_pred_bor_plot) +
   ggplot2::scale_fill_viridis_d(
     na.value = NA,
