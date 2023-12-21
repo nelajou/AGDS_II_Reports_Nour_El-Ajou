@@ -142,6 +142,7 @@ df_full <- df_full |>
 ## missing values
 
 ```{r}
+
 # Get number of rows to calculate percentages
 n_rows <- nrow(df_full)
 
