@@ -65,8 +65,10 @@ mol m
 Species: species name of the plant on which leaf N was measured
 Report the mean RMSE and R
  across cross-validation folds. Chose hyperparameters as mtry = 3 and min.node.size = 12 and others as their default in ranger::ranger().
- 
-## Packages
+
+## 2.2.1 Preparation 
+
+### Packages
 
 ```{r, echo = FALSE}
 library(tidyverse)
@@ -77,14 +79,14 @@ if(length(new.packages)) install.packages(new.packages)
 lapply(list.of.packages, library, character.only=TRUE)
 ```
  
-## Data read in
+### Data read in
  
 ```{r, echo = FALSE}
 rm(list = ls())
 
 df <- readr::read_csv("https://raw.githubusercontent.com/stineb/leafnp_data/main/data/leafnp_tian_et_al.csv")
 ```
-
+### Data cleaning and Split
 
 ```{r}
 common_species <- df |> 
@@ -115,7 +117,9 @@ visdat::vis_miss(dfs)
 dfs$Species <- dfs$Species |> as.factor()
 
 ```
-## Formulate model
+## 2.2.2 Random Forest Model
+
+### Formulate model
 
 ```{r}
 # The same model formulation is in the previous chapter
@@ -126,7 +130,7 @@ pp <- recipes::recipe(leafN ~ elv + mat + map + ndep + mai + Species,
 ```
 
 
-## Train RF with 5 - fold random CV
+### Train RF with 5 - fold random CV
 ```{r}
 # Load required libraries
 library(caret)
@@ -159,7 +163,7 @@ rf_1000_5 <- caret::train(
 )
 ```
 
-## Show Results - Random CV
+## 2.2.3 Results - Random CV
 ```{r}
 print(rf_1000_5)
 ```
@@ -601,7 +605,7 @@ rmse.table <- as.data.frame(rbind(
   round(c(rf_1000_5$results$Rsquared, mean(output_geo$rsq), mean(output_env$rsq)),3)
   ) )
 rownames(rmse.table) <- c("RMSE", "R2")
-colnames(rmse.table) <- c("Random CV", "Coordinates  CV", "Environmental CV")
+colnames(rmse.table) <- c("Random CV", "Geographica  CV", "Environmental CV")
 rmse.table
 ```
 
