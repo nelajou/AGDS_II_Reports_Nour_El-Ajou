@@ -9,8 +9,9 @@ output: html_document
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
+# Note by Author
 
-
+This markdown document represents a summary of the analysis done for this exersice. The key plots are shown, together with the interpretation of the results, together with some illustrative code chunks. For complete understanding of the code used, please refere to the respective "analys" files within the "analysis" folder. 
 
 
 # 2.1 Literature
@@ -69,58 +70,38 @@ Report the mean RMSE and R
 
 ## 2.2.1 Data Preparation 
 
-### Packages
-
-```{r, echo = FALSE}
-library(tidyverse)
-
-list.of.packages <- c("ggplot2","skimr", "tidyverse", "caret", "OneR", "dplyr", "kableExtra", "visdat", "h2o")
-new.packages <- list.of.packages[!(list.of.packages %in% installed.packages()[,"Package"])]
-if(length(new.packages)) install.packages(new.packages)
-lapply(list.of.packages, library, character.only=TRUE)
-```
- 
-### Data read in
- 
-```{r, echo = FALSE}
-rm(list = ls())
-
-df <- readr::read_csv("https://raw.githubusercontent.com/stineb/leafnp_data/main/data/leafnp_tian_et_al.csv")
-```
-### Data cleaning and Split
 
 ```{r}
-common_species <- df |> 
-  dplyr::group_by(Species) |> 
-  dplyr::summarise(count = n()) |> 
-  dplyr::arrange(desc(count)) |> 
-  dplyr::slice(1:50) |> 
-  dplyr::pull(Species)
-
-dfs <- df |> 
-  dplyr::select(leafN, lon, lat, elv, mat, map, ndep, mai, Species) |> 
-  filter(Species %in% common_species)
-
+source("../analysis/ex_upscale/analys_random_cv.R")
 ```
 
+
+```{r}
+head(dfs)
+```
+
+We split the data into a 70% Trainings set and a 30% Testing set. 
 
 ```{r, echo = FALSE}
 # Data splitting
-split <- rsample::initial_split(dfs, prop = 0.7, strata = "Species")
-df_train <- rsample::training(split)
+# split <- rsample::initial_split(dfs, prop = 0.7, strata = "Species")
+# df_train <- rsample::training(split)
 ```
 
-
-
-```{r, echo = FALSE}
-# show missing data
-visdat::vis_miss(dfs)
-dfs$Species <- dfs$Species |> as.factor()
+```{r}
+ knitr::include_graphics("../plots/ex_upscale/na_dist_plot.png")
 
 ```
+We see that there are no missing values at all. 
+
+
 ## 2.2.2 Random Forest Model
 
+
 ### Formulate model
+
+Next, we formulate the model, in which we predict leave nitrogen values through a combination of different environmental factors. 
+
 
 ```{r}
 # The same model formulation is in the previous chapter
@@ -131,40 +112,10 @@ pp <- recipes::recipe(leafN ~ elv + mat + map + ndep + mai + Species,
 ```
 
 
-### Train RF with 5 - fold random CV
-```{r}
-# Load required libraries
-library(caret)
-library(ranger)
 
-# Set seed for reproducibility
-set.seed(199)
+### Resullts - Random CV
 
-# Create a data frame to store results
-results <- data.frame()
-
-rf_1000_5 <- caret::train(
-  pp, 
-  data = df_train |> 
-    drop_na(), 
-  method = "ranger",
-  metric = "RMSE",
-  trControl = trainControl(
-    method = "cv",
-    number = 5,
-    savePredictions = "final"
-    ),
-  tuneGrid = expand.grid(
-    .mtry = 3,        # default p/3
-    .min.node.size = 12,          
-    .splitrule = "variance"      # default "variance"
-  ),
-  # arguments specific to "ranger" method
-  num.trees = 1000
-)
-```
-
-## 2.2.3 Results - Random CV
+After training , we  print the results
 ```{r}
 print(rf_1000_5)
 ```
@@ -172,56 +123,32 @@ print(rf_1000_5)
 
 ```{r}
 # RMSE of 5-fold cross-validation
-rmse.bas <- rf_1000_5$results$RMSE
-
 cat("the RMSE of the basic model is", round(rmse.bas, 3))
 
 ```
 
 ```{r}
 # Rsquared of 5-fold cross-validation
-r2.bas <- rf_1000_5$results$Rsquared
 cat("the R2 of the basic model is", r2.bas)
 
 ```
+
 
 # 2.3 Spatial Crossvalidation
  
 Here is the distribution of our data across the globe.
 
-
-## Packages
 ```{r}
-# DISPLAYING SPATIAL DISTRIBUTION
-list.of.packages <- c("sf", "rnaturalearth", "rnaturalearthdata", "cowplot")
-new.packages <- list.of.packages[!(list.of.packages %in% installed.packages()[,"Package"])]
-if(length(new.packages)) install.packages(new.packages)
-lapply(list.of.packages, library, character.only=TRUE)
+source("../analysis/ex_upscale/analys_geographical_cv.R")
 ```
 
-## Clustered Global Map
-```{r}
-# get coast outline
-coast <- rnaturalearth::ne_coastline(scale = 110, returnclass = "sf")
 
-ggplot() +
-
-  # plot coastline
-  geom_sf(data = coast,
-          colour = 'black',
-          size = 0.2) +
-
-  # set extent in longitude and latitude
-  coord_sf(
-    ylim = c(-60, 80),
-    expand = FALSE) +  # to draw map strictly bounded by the specified extent
-  
-  # plot points on map
-  geom_point(data = dfs, aes(x = lon, y = lat), color = "red", size = 0.2) +
-  labs(x = "", y = "") +
-  theme(legend.position = "bottom")
-```
 ## 2.3.1 Map Discussion
+
+```{r}
+knitr::include_graphics("../plots/ex_upscale/data.map.png")
+```
+
 
 
 What do you observe? Discuss the potential implications of the geographical distribution of data points for spatial upscaling.
@@ -229,24 +156,18 @@ What do you observe? Discuss the potential implications of the geographical dist
 Answer:
 
 The wast majoritiy of the datapoints are in Europe and Eastern parts of China. There are some datapoints in North - and South-America, one in northern Africa and some widely dispersed points in central Asia. Consequently, the northern Hemisphere is clearly over represented, especially European environment, alongside the eastern  regions of China. Thus, we would expect our model to show predict much better for environmental conditions which are similar to the ones of these regions. 
- 
- 
- ## 2.3.2 Spatial Cross Validation
- 
- 
- Perform a spatial cross-validation. 
- 
-To do so, first identify geographical clusters of the data using the k-means algorithm (an unsupervised machine learning method), considering the longitude and latitude of data points and setting 
- 
-
-Plot points on a global map, showing the five clusters with distinct colors.
 
 
-Note: From here on out, I will refer to the clusters, which are built based on geographical distances between coordinates as the "geographical" clusters. The reason for this is, that in the last part, we will build clusters based on predictor space, which makes the use of the term "spatial clusters" possibly confusing. 
+## 2.3.2 Build geographical Clusters
 
+Perform a spatial cross-validation. 
+To do so, first identify geographical clusters of the data using the k-means algorithm (an unsupervised machine learning method), considering the longitude and latitude of data points and setting . Plot points on a global map, showing the five clusters with distinct colors.
  
-## 2.3.2 Generate regional clusters
-```{r, echo = FALSE}
+### Clusters based on geographical distance
+
+We use the K-means algorithm in order to build different clusters using the following code. 
+
+```{r}
 # K-Means algorithm
 clusters <- kmeans(
   dfs |> dplyr::select(lon, lat),
@@ -255,53 +176,28 @@ clusters <- kmeans(
 
 #add to dataset
 dfs <- cbind(dfs, clusters[["cluster"]]) |> rename(cluster = 10)
+
 ```
 
-## Plot regional clusters
-```{r, echo = FALSE}
-ggplot() +
+ 
+### Plot Geographical clusters
 
-  # plot coastline
-  geom_sf(data = coast,
-          colour = 'black',
-          size = 0.3) +
+Plot points on a global map, showing the five clusters with distinct colors.
 
-  # set extent in longitude and latitude
-  coord_sf(
-    ylim = c(-60, 80),
-    expand = FALSE) +  # to draw map strictly bounded by the specified extent
-  
-  # plot points on map
-  geom_point(data = dfs, aes(x = lon, y = lat, col = as.factor(cluster)),
-             size = 0.5) +
-  labs(x = "", y = "", col = "Cluster", title = "Spatial Clusters based on Geographical distance") +
-  theme(legend.position = "bottom") +
-  guides(colour = guide_legend(override.aes = list(size=5)))
+The regional clusters are shown on the following global map. 
+```{r}
+knitr::include_graphics("../plots/ex_upscale/geo_clusters_map.png")
 ```
+
 
 
 ## 2.3.3 Plot the distribution of leaf N by regional cluster.
 
 ```{r, echo = FALSE}
-# Distribution curve plot
-curve_plot <- ggplot(dfs, aes(x = leafN, color = as.factor(cluster))) +
-  geom_density(alpha = 0.7) +
-  labs(x = "Leaf N content (%)", y = "Density", col = "Cluster") +
-  theme_minimal()
-
-# Boxplot plot
-boxplot_plot <- ggplot(dfs, aes(x = cluster, y = leafN, fill = as.factor(cluster))) +
-  geom_boxplot() +
-  labs(x = "Cluster", y = "Leaf N content (%)", fill = "Cluster") +
-  theme_minimal()
-
-# Combine both plots using cowplot package
-combined_plot <- plot_grid(curve_plot, boxplot_plot, ncol = 2, labels = c("A", "B"))
-
-print(combined_plot)
+knitr::include_graphics("../plots/ex_upscale/comb_box_plot.png")
 ```
 Looking at the density and the boxplots based on geographical distance, we can see that the target variable doesn't change strongly dependent on the respective cluster.
-Looking at the map, this is somewhat expected, since we can clearly see that very similar environmental conditions do lead to different clusters, as for example in central-northern Europe. 
+If we compare it to the map, this is somewhat expected, since we can clearly see that very similar environmental conditions do lead to different clusters, as for example in central-northern Europe. 
 
 ## 2.3.4 Random Forest - Geographical Clusters
 
@@ -309,12 +205,16 @@ Split your data into five folds that correspond to the geographical clusters ide
 
 fit a random forest model with the same hyperparameters as above and performing a 5-fold cross-validation with the clusters as folds.
 
-Report the RMSE and the R
+Report the RMSE and the R-squared
  determined on each of the five folds
 
-## Data Split
+
+Note: From here on out, I will refer to the clusters, which are built based on geographical distances between coordinates as the "geographical" clusters. The reason for this is, that in the last part, we will build clusters based on predictor space, which makes the use of the term "spatial clusters" possibly confusing. 
+
+### Clusters into Folds
+
+we use the following code create folds based on the clusters
 ```{r}
-# create folds based on clusters
 group_folds_train <- purrr::map(
   seq(length(unique(dfs$cluster))),
   ~ {
@@ -336,10 +236,11 @@ group_folds_test <- purrr::map(
       pull(idx)
   }
 )
+
 ```
 
+### Model Validation - Geographical CV
 
-## Train random forest - Geographical Clusters
 ```{r}
 # create a function that trains a random forest model on a given set of rows and 
 # predicts on a disjunct set of rows
@@ -354,8 +255,7 @@ train_test_by_fold <- function(train_idx, val_idx) {
     num.trees = 500
   )
 
- 
-# Predict on the validation set
+   # Predict on the validation set
   pred <- predict(mod, data = dfs[val_idx, ])
   
   # Calculate R-squared on the validation set
@@ -366,26 +266,21 @@ train_test_by_fold <- function(train_idx, val_idx) {
   
   return(tibble(rsq = rsq, rmse = rmse))
 }
+```
 
-# apply function on each custom fold and collect validation results in a nice
-# data frame
-output_geo <- purrr::map2_dfr(
-  group_folds_train,
-  group_folds_test,
-  ~train_test_by_fold(.x, .y)
-) |> 
-  mutate(test_fold = 1:5)
 
+
+### Results - Geographical CV
+
+```{r}
 print(output_geo)
 ```
 
 ```{r}
-rmse.geo <- (mean(output_geo$rmse))
 cat("the mean RMSE of the Geographical Cross Validation is", round(rmse.geo,3 ))
 ```
 
 ```{r}
-r2.geo <- mean(output_geo$rsq)
 cat("the mean R-Squared of the Geographical Cross Validation is",round(r2.geo,3) )
 
 ```
@@ -397,15 +292,6 @@ cat("the mean R-Squared of the Geographical Cross Validation is",round(r2.geo,3)
 Compare the results of the spatial cross-validation to the results of the random cross-validation and discuss reasons for why you observe a difference in the cross-validation metrics (if you do).
 
 ```{r}
-comp.table <- as.data.frame(
-  rbind(cbind(rmse.bas, r2.bas),
-      cbind(rmse.geo, r2.geo)
-)
-)
-
-colnames(comp.table) <- c("RMSE", "R2")
-rownames(comp.table) <- c("Random CV" , "Geographic CV")
-
 round(comp.table,3)
 ```
 We see that the Random CV shows a clearly lower RMSE together with a higher R2.
@@ -418,153 +304,71 @@ The central rationale for spatial uspcaling is that we can model based on relati
 
 Anyways, let’s probe the generalisability of a model not in geographical space, but in environmental space.
 
+
+## 2.4.1 Model Validation - Environmental CV
+
+
+```{r}
+source("../analysis/ex_upscale/analys_environmental_cv.R")
+```
+
+
 To do so, perform a custom cross-validation as above, but this time considering five clusters of points not in geographical space, but in environmental space - spanned by the mean annual precipitation and the mean annual temperature. Report the R-squared and the RMSE on the validation set of each of the five folds.
-Compare the results of the environmental cross-validation to the results of the random and the spatial cross-validation and discuss reasons for why you observe a difference in the cross-validation metrics (if you do).
 
 
-## 2.4.0 Standardize predictors 
-```{r, echo = FALSE}
+### Standardize predictors 
+
+in order to genereate distances in environmental space, we have to standardise our predictor set. 
+
+```{r}
 dfs_env <- dfs
 dfs_env$map <- (dfs_env$map-mean(dfs_env$map) )/sd(dfs_env$map)
 dfs_env$mat <- (dfs_env$mat-mean(dfs_env$mat) )/sd(dfs_env$mat)
 ```
 
 
-## 2.4.1 Build environmental Clusters
-```{r, echo = FALSE}
+### Clusters based on predictor distance
+
+The method is analogous to the one used for geographical CV
+```{r}
 clusters_env <- kmeans(
   dfs_env |> dplyr::select(map, mat),
   centers = 5
 )
 
 dfs_env<- cbind(dfs_env, clusters_env[["cluster"]]) |> rename(cluster_env = 11)
+
 ```
 
 
-
-## 2.4.2 Plot environmental Clusters
+### Plot environmental Clusters
 ```{r, echo = FALSE}
-ggplot() +
-
-  # plot coastline
-  geom_sf(data = coast,
-          colour = 'black',
-          size = 0.3) +
-
-  # set extent in longitude and latitude
-  coord_sf(
-    ylim = c(-60, 80),
-    expand = FALSE) +  # to draw map strictly bounded by the specified extent
-  
-  # plot points on map
-  geom_point(data = dfs_env, aes(x = lon, y = lat, col = as.factor(cluster_env)),
-             size = 0.5) +
-  labs(x = "", y = "", col = "Environmental Cluster",
-       title = "Environmental Clusters based on mean annual temperature and precipitation") +
-  theme(legend.position = "bottom") +
-  guides(colour = guide_legend(override.aes = list(size=5)))
-
+knitr::include_graphics("../plots/ex_upscale/env_clusters_map.png")
 ```
 
 
-## 2.4.3 Plot the distribution of leaf N by environmental cluster.
+###  Plot the distribution of leaf N by environmental cluster.
 
 ```{r, echo = FALSE}
-# Distribution curve plot
-curve_plot <- ggplot(dfs_env, aes(x = leafN, color = as.factor(cluster_env))) +
-  geom_density(alpha = 0.7) +
-  labs(x = "Leaf N content (%)", y = "Density", col = "Cluster") +
-  theme_minimal()
-
-# Boxplot plot
-boxplot_plot <- ggplot(dfs_env, aes(x = cluster, y = leafN, fill = as.factor(cluster_env))) +
-  geom_boxplot() +
-  labs(x = "Cluster", y = "Leaf N content (%)", fill = "Cluster") +
-  theme_minimal()
-
-# Combine both plots using cowplot package
-combined_plot <- plot_grid(curve_plot, boxplot_plot, ncol = 2, labels = c("A", "B"))
-
-print(combined_plot)
+knitr::include_graphics("../plots/ex_upscale/combined_env_plot.png")
 ```
+
 We can see looking at the densities and tha boxplots that the Leave Nitrogen values don't differ widely between the different environmental clusters, which is similar to the boxplots of the clusters based on geographical distance. This comes unexpected, since we would think that the different clusters lead to different levels of leaf nitrogen. Consequently, this might indicate a relatively low feature importance of annual temperature and precipitation for leaf nitrogen values. 
 
-## 2.4.4 Random Forest - Environmental Clusters
+### Model Validation - Environmental CV
 
-```{r, echo = FALSE}
-# create folds based on envrionmental clusters
-group_folds_train <- purrr::map(
-  seq(length(unique(dfs_env$cluster_env))),
-  ~ {
-    dfs_env |> 
-      select(cluster_env) |> 
-      mutate(idx = 1:n()) |> 
-      filter(cluster_env != .) |> 
-      pull(idx)
-  }
-)
-
-group_folds_test <- purrr::map(
-  seq(length(unique(dfs_env$cluster_env))),
-  ~ {
-    dfs_env |> 
-      select(cluster_env) |> 
-      mutate(idx = 1:n()) |> 
-      filter(cluster_env == .) |> 
-      pull(idx)
-  }
-)
-```
+The Training of the Random Forest for environmental clustering is analogous to the code used for the geographical clusters. 
 
 
-```{r, echo = FALSE}
-# create a function that trains a random forest model on a given set of rows and 
-# predicts on a disjunct set of rows
-train_test_by_fold <- function(train_idx, val_idx) {
-  
-  # Train the model
-  mod <- ranger(
-    formula = leafN ~ elv + mat + map + ndep + mai + Species, 
-    data = dfs_env[train_idx, ],
-    mtry = 3,
-    min.node.size = 12,
-    num.trees = 1000
-  )
-  
-  # Predict on the validation set
-  pred <- predict(mod, data = dfs_env[val_idx, ])
-  
-  # Calculate R-squared on the validation set
-  rsq <- cor(pred$predictions, dfs_env$leafN[val_idx])^2
-  
-  # Calculate RMSE on the validation set
-  rmse <- sqrt(mean((pred$predictions - dfs_env$leafN[val_idx])^2))
-  
-  return(tibble(rsq = rsq, rmse = rmse))
-}
-
-# apply function on each custom fold and collect validation results in a nice
-# data frame
-output_env <- purrr::map2_dfr(
-  group_folds_train,
-  group_folds_test,
-  ~train_test_by_fold(.x, .y)
-) |> 
-  mutate(test_fold = 1:5)
-```
-
-
-## 2.4.5 Results - Environmental Clustering
+### Results - Environmental Clustering
 
 
 ```{r, echo = FALSE}
 output_env
-
 ```
 
 
 ```{r}
-rmse.env <- (mean(output_env$rmse))
 cat("the RMSE of the environmental Cross Validation is", rmse.env)
 ```
 
@@ -574,29 +378,32 @@ cat("the R-Squared of the environmental Cross Validation is", mean(output_env$rs
 ```
 
 
-## 2.5 Summary of Results - All three models
+## 2.5.2 Comparison of Results - All three models
+
+Compare the results of the environmental cross-validation to the results of the random and the spatial cross-validation and discuss reasons for why you observe a difference in the cross-validation metrics (if you do).
+
+### Metrics Table
 
 ```{r}
-rmse.table <- as.data.frame(rbind(
-  round(c(rmse.bas, rmse.geo, rmse.env),3),
-  round(c(rf_1000_5$results$Rsquared, mean(output_geo$rsq), mean(output_env$rsq)),3)
-  ) )
-rownames(rmse.table) <- c("RMSE", "R2")
-colnames(rmse.table) <- c("Random CV", "Geographical  CV", "Environmental CV")
-rmse.table
+metrics.table
 ```
 
 ### comparison of the two spatial models
-```{r}
-spat.table <- rbind(output_geo, output_env)
-spat.table$type <- c(rep("geo", 5), rep("env", 5))
-boxplot(rmse~type,data = spat.table, main = "RMSE")
-boxplot(rsq~type,data = spat.table, main = "R-Squared")
 
+In the last step, we compare the different RMSE's and R2 of the different validation rounds by both models. 
+
+```{r}
+knitr::include_graphics("../plots/ex_upscale/boxplot.rmse.png")
 ```
 
 
-## 2.6 Discussion
+```{r}
+knitr::include_graphics("../plots/ex_upscale/boxplot.r2.png")
+
+```
+As we can see, both metrics are very similarly distributet across both models, considering that we have only 5 data points (see discussion for further explanation)
+
+### Discussion
 
 Looking at the RMSE and the R-Squared , the Model done through random shows the smallest standard error and the higher R-Squared, followed by the Environmental CV and the Spatial CV, which shows the highest error and the smallest R-Squared. 
 This said, both Metrics of the latter two models are fairly close to each other. 
@@ -607,7 +414,7 @@ We intentionally corrected for this clustering through the generation of folds b
 
 The mild difference between the RMSE of the environmental and the spatial CV on the other hand, is somewhat surprising. Since we expect predictors in our model to have a significant importance, the idea is that generating the CV Folds based on predictor space, should correct the clustering of the sampling data even more than the folds based geographical distance. Consequently, we would expect the RMSE of the Environmental CV to be higher than the one of the geographical CV. However the opposite is the case in the data and the difference also persists when changing the random seed. 
 
-Looking at the boxplots, we can see that R-Squared and RMSE are very similar distributed for the geographical and the environmental clustering, considering that we have only 5 Datapoints for each CV. Hence, both models seem to be similar in their extrapolating power, if the interest is to find a model which can be used on a global scale.
+Looking at the box plots of RMSE and R-squared, we can see that both metrics are very similar distributed for the geographical and the environmental clustering, considering that we have only 5 Data points for each CV. Hence, both models seem to be similar in their extrapolating power, if the interest is to find a model which can be used on a global scale.
 
 Still, I would argue that the clusters based on predictor distance, and hence the model, is more desirable, if we want to interpret the results and formulate Hypothesizes out of it. This is because we can formulate hypothesises about the nature of the relationship between our target and the predictors. If we only use geographical distance on the other hand, this will be hard. 
 
