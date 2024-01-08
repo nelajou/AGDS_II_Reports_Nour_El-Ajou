@@ -420,21 +420,21 @@ As we can see, both metrics are very similarly distributet across both models, c
 
 ### Discussion
 
-Looking at the RMSE and the R-Squared , the Model done through random shows the smallest standard error and the higher R-Squared, followed by the Environmental CV and the Spatial CV, which shows the highest error and the smallest R-Squared. 
+Looking at the RMSE and the R-Squared , the Model with random CV shows the smallest standard error and the higher R-Squared, followed by the environmental CV and the Spatial CV, which shows the highest error and the smallest R-Squared. 
 This said, both Metrics of the latter two models are fairly close to each other. 
-
 This result is expected. Since the data itself is clustered, random CV reproduces this clustering within its folds, which means that the resulting model should show a relatively good fit to such clustered data.
 
-We intentionally corrected for this clustering through the generation of folds based on distance in geographic and predictor space for the other two models, so their fit, to the clustered data is worse , but they should be more useful in predicting for unknown data all over the globe, than the first model. One could also say that the RMSE for the Random CV is underestimated, due to the clustering of the data. 
+We intentionally corrected for this clustering through the generation of folds based on distance in geographic and predictor space for the other two models, so their fit to the clustered data is worse. But they should be more useful in predicting for unknown data all over the globe, than the first model. One could also say that the RMSE for the Random CV is underestimated, due to the clustering of the data. 
 
-The mild difference between the RMSE of the environmental and the spatial CV on the other hand, is somewhat surprising. Since we expect predictors in our model to have a significant importance, the idea is that generating the CV Folds based on predictor space, should correct the clustering of the sampling data even more than the folds based geographical distance. Consequently, we would expect the RMSE of the Environmental CV to be higher than the one of the geographical CV. However the opposite is the case in the data and the difference also persists when changing the random seed. 
+The mild difference between the RMSE of the environmental and the spatial CV on the other hand, is somewhat surprising. Since we expect predictors in our model to have a significant importance, the idea is that generating the CV folds based on predictor space, should correct the clustering of the sampling data even more than the folds based on geographical distance. Consequently, we would expect the RMSE of the Environmental CV to be higher than the one of the geographical CV. However the opposite is the case in the data and this difference also persists when changing the random seed. 
 
-Looking at the box plots of RMSE and R-squared, we can see that both metrics are very similar distributed for the geographical and the environmental clustering, considering that we have only 5 Data points for each CV. Hence, both models seem to be similar in their extrapolating power, if the interest is to find a model which can be used on a global scale.
-
-Still, I would argue that the clusters based on predictor distance, and hence the model, is more desirable, if we want to interpret the results and formulate Hypothesizes out of it. This is because we can formulate hypothesises about the nature of the relationship between our target and the predictors. If we only use geographical distance on the other hand, this will be hard. 
-
-One possible explanation would be that the predictors chosen, annal mean temperature and precipitation don't have a high enough feature importance. This could definitely be for two reasons: 
+One possible explanation for the difference would be that the predictors chosen, annal mean temperature and precipitation don't have a high enough feature importance. This could definitely be for two reasons: 
 
 First, Vegetation growth is not only dependent on annual means of these variables , but also of the variation between seasons, months and days of them. Consequently, the yearly averages might not have much explaining power. 
 
-Secondly, there are other variables in the model, like atmospheric nitrogen content, or Solar iradiance that may have a much higher predicting power in general. This could be checked in a further step. If this were to be true, one could try to generate the folds based on the predictor distance of all predictors. But even then, we calculate the clusters based on the euclidean distance, which means that the folds will not correspond to the feature importance of the predictors. So this approach would need further consideration.
+Secondly, there are other variables in the model, like atmospheric nitrogen content, or Solar iradiance that may have a much higher predicting power in general. This could be checked in a further step. If this were to be true, one could try to generate the folds based on the predictor distance of all predictors. But even then, we calculate the clusters based on the euclidean distance, which means that the folds will not correspond to the feature importance of the predictors. So, this approach would need further consideration.
+
+Looking at the box plots of the RMSE and the R-squared, we can see that both metrics are very similar distributed for the geographical and the environmental clustering, considering that we have only 5 Data points for each form of CV. Hence, both models seem to be similar in their extrapolating power, if the interest is to find a model which can be used on a global scale.
+
+Still, I would argue that the clusters based on predictor distance, and hence the model, is more desirable, if we want to interpret the results and formulate hypothesizes out of it. This, because we can formulate hypothesises about the nature of the relationship between our target and the predictors. If we only use geographical distance on the other hand, this would be hard. 
+
