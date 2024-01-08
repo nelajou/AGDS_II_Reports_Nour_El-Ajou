@@ -15,7 +15,7 @@ lapply(list.of.packages, library, character.only=TRUE)
 ## --------------------------------------------------------------------------------------
 library(tidyverse)
 
-sessionInfo()
+# sessionInfo()
 
 # Load soil data from sampling locations
 df_obs <- readr::read_csv(
@@ -52,7 +52,7 @@ lapply(
 raster_example <- terra::rast(
   here::here("data/ex_soil/covariates/Se_slope2m.tif")
 )
-raster_example
+# raster_example
 
 
 ## --------------------------------------------------------------------------------------

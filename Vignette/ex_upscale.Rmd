@@ -70,22 +70,32 @@ Report the mean RMSE and R
 
 ## 2.2.1 Data Preparation 
 
-
 ```{r}
 source("../analysis/ex_upscale/analys_random_cv.R")
 ```
+### Data Overview
+
+First, we look at the dimensions of our Data set
+```{r}
+dim(dfs)
+```
+We seet that we have 22'472 Obersvations of 9 variables.
 
 
 ```{r}
 head(dfs)
 ```
+The data is as explained in the Exersice description, with the Leaf Nitrogen values, the coordinates, and different environmental features as columns. 
+
+
+### Trainings and Test Data
 
 We split the data into a 70% Trainings set and a 30% Testing set. 
 
 ```{r, echo = FALSE}
 # Data splitting
-# split <- rsample::initial_split(dfs, prop = 0.7, strata = "Species")
-# df_train <- rsample::training(split)
+split <- rsample::initial_split(dfs, prop = 0.7, strata = "Species")
+df_train <- rsample::training(split)
 ```
 
 ```{r}
@@ -113,13 +123,13 @@ pp <- recipes::recipe(leafN ~ elv + mat + map + ndep + mai + Species,
 
 
 
-### Resullts - Random CV
+### Print random Forest - Random CV
 
 After training , we  print the results
 ```{r}
 print(rf_1000_5)
 ```
-
+### Metrics - Random CV
 
 ```{r}
 # RMSE of 5-fold cross-validation
@@ -136,7 +146,6 @@ cat("the R2 of the basic model is", r2.bas)
 
 # 2.3 Spatial Crossvalidation
  
-Here is the distribution of our data across the globe.
 
 ```{r}
 source("../analysis/ex_upscale/analys_geographical_cv.R")
@@ -144,6 +153,8 @@ source("../analysis/ex_upscale/analys_geographical_cv.R")
 
 
 ## 2.3.1 Map Discussion
+
+Here is the distribution of our data across the globe.
 
 ```{r}
 knitr::include_graphics("../plots/ex_upscale/data.map.png")
@@ -197,6 +208,7 @@ knitr::include_graphics("../plots/ex_upscale/geo_clusters_map.png")
 knitr::include_graphics("../plots/ex_upscale/comb_box_plot.png")
 ```
 Looking at the density and the boxplots based on geographical distance, we can see that the target variable doesn't change strongly dependent on the respective cluster.
+
 If we compare it to the map, this is somewhat expected, since we can clearly see that very similar environmental conditions do lead to different clusters, as for example in central-northern Europe. 
 
 ## 2.3.4 Random Forest - Geographical Clusters
@@ -208,8 +220,7 @@ fit a random forest model with the same hyperparameters as above and performing 
 Report the RMSE and the R-squared
  determined on each of the five folds
 
-
-Note: From here on out, I will refer to the clusters, which are built based on geographical distances between coordinates as the "geographical" clusters. The reason for this is, that in the last part, we will build clusters based on predictor space, which makes the use of the term "spatial clusters" possibly confusing. 
+Note by Author: From here on out, I will refer to the clusters, which are built based on geographical distances between coordinates as the "geographical" clusters. The reason for this is, that in the last part, we will build clusters based on predictor space, which makes the use of the term "spatial clusters" possibly confusing. 
 
 ### Clusters into Folds
 
@@ -241,6 +252,8 @@ group_folds_test <- purrr::map(
 
 ### Model Validation - Geographical CV
 
+Then we train again the model and return the R-Squared together with the RMSE.
+
 ```{r}
 # create a function that trains a random forest model on a given set of rows and 
 # predicts on a disjunct set of rows
@@ -270,7 +283,9 @@ train_test_by_fold <- function(train_idx, val_idx) {
 
 
 
-### Results - Geographical CV
+### Metrics - Geographical CV
+
+Then we look specifically at the Metrics.
 
 ```{r}
 print(output_geo)

@@ -183,7 +183,7 @@ rf_boruta_map <- ggplot2::ggplot(raster_pred_bor_plot_df) +
   ggplot2::theme_classic() +
   ggplot2::scale_x_continuous(expand = c(0, 0)) +
   ggplot2::scale_y_continuous(expand = c(0, 0)) +
-  ggplot2::labs(title = "Predicted waterlog at 100 cm depth, binary variable")
+  ggplot2::labs(title = "Predicted waterlog at 100 cm depth, binary variable - Boruta Model")
 
 ggsave("../plots/ex_soil/rf_boruta_map.png", plot = rf_boruta_map, width = 8, height = 6)
 
@@ -265,7 +265,7 @@ preferred_model <- as.vector(
 
 diag_table <- rbind(diag_table, preferred_model)
 
-rownames(diag_table) <- c("Basic RF", "Boruta RF", "preferred Model")
+rownames(diag_table) <- c("Basic RF", "Boruta RF", "Preferred Model")
 diag_table
 
 

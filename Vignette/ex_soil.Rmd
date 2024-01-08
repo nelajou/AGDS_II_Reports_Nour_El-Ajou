@@ -12,7 +12,7 @@ rm(list = ls())
 
 # Note by Author
 
-This markdown document represents a summary of the analysis done for this exersice. The key plots are shown, together with the interpretation of the results, together with some illustrative code chunks. For complete understanding of the code used, please refere to the respective "analys" files within the "analysis" folder. 
+This markdown document represents a summary of the analysis done for this exersice. The key plots are shown, together with the interpretation of the results, together with some illustrative code chunks and tables. For complete understanding of the code used, please refer to the respective "analys" files within the "analysis" folder. 
 
 
 # 5.1 Simple Random Forest model
@@ -41,8 +41,24 @@ What does this imply for the interpretation of the different metrics?
 
 ### Data overview
 ```{r}
+dim(df_full)
+```
+We see that we have 1052 observations of 103 variables.
+
+```{r}
 head(df_full)
 ```
+While the first 14 columns denote soil features, together with the labeling coordinates and the timestamp, the others denote environmental features.
+
+### Spat Raster
+
+We use SpatRaster files in order for our Predictors, here is an example, measuring slope for the defined Area. 
+
+```{r}
+raster_example
+```
+
+
 ### Factor encoding 
 
 Check for variables with less than 10 discrete values, so we can code them to factors
@@ -74,19 +90,59 @@ cat("For model training, we have a calibration / validation split of: ",
 
 We see that our target variable "waterlog.100", doesn't have any missing values.
 
+### 
 
-## 5.1.2 Train basic random forest
+## 5.1.2 Train Basic Random Forest
 
 ```{r}
 source("../analysis/ex_soil/analys_basic_rf.R")
 ```
+We train the random forest using the ranger package
+
+```{r}
+# ranger() crashes when using tibbles, so we are using the
+# base R notation to enter the data
+rf_basic <- ranger::ranger( 
+  y = df_train[, target],     # target variable
+  x = df_train[, predictors_all], # Predictor variables
+  seed = 42,                    # Specify the seed for randomization to reproduce the same model again
+  num.threads = parallel::detectCores() - 1) # Use all but one CPU core for quick model training
+
+# Print a summary of fitted model
+# print(rf_basic)
+
+```
+
+
+
 ### Print Random Forest - Basic Forest
 
+Then we can print it
 ```{r}
 print(rf_basic)
 ```
+Our forest has 500 trees, mtry = 9 and a OOB of 21.16
+
+### Prediction - Basic Random Forest
+
+The following Code is used to generate predictions.
+```{r}
+# Make predictions using the RF model
+prediction <- predict(
+  rf_basic,              # RF model
+  data = df_predict,   
+  num.threads = parallel::detectCores() - 1
+)
+
+# Attach predictions to dataframe and round them
+df_predict$prediction <- prediction$predictions
+
+
+```
 
 ### Prediction Map - Basic Random Forest
+
+Lets have a look at our map. 
 
 ```{r}
 knitr::include_graphics("../plots/ex_soil/rf_basic_map.png")
@@ -110,12 +166,12 @@ cat("the accuracy for the basic model is ",acc_basic)
 
 ### Precision = TP / (TP + FP) - Basic Forest
 ```{r}
-cat("the precision for the basic model is ",prec_basic)
+cat("the precision for the basic model is ",round(prec_basic,3))
 ```
 
 ### f1 = 2TP / (2TP + FP + FN) - Basic Forest
 ```{r}
-cat("the f1 for the basic model is ",f1_basic)
+cat("the f1 for the basic model is ",round(f1_basic,3))
 
 ```
 
@@ -142,7 +198,7 @@ summary(df_train$waterlog.100 == 1)
 ```
 
 ```{r}
-cat("the percentage of positives is equal to ", share_of_postives_train, "in the training dataset")
+cat("the percentage of positives is equal to ", round(share_of_postives_train,3), "in the training dataset")
 ```
 
 
@@ -164,14 +220,23 @@ source("../analysis/ex_soil/analys_boruta_rf.R")
 
 ```{r}
 knitr::include_graphics("../plots/ex_soil/feat_imp_plot.png")
-
 ```
-## 5.2.2 Boruta Forest
+We see that roughely a third of all predictors were rejected, and a bit more thant that were confirmed. 
+
+
+## 5.2.2 Train Boruta Random Forest
+
+Repeat the model evaluation and compare the model performance on the test set with what was obtained with the model using all available covariates. Which model generalises better to unseen data?
 
 ### Print Random Forest - Boruta Forest
+
+In a next step, we can train the same Random forest model, but only with the predictors that have been "confirmed".
+
 ```{r}
 print(rf_bor)
 ```
+Again, we have 400 Trees, but a mtry of 605 and a OOB prediction Error of 20.17
+
 ### Prediction map - Boruta Forest
 
 ```{r}
@@ -200,17 +265,17 @@ cat("the accuracy for the boruta model is ",acc_bor)
 
 ### Precision = TP / (TP + FP) - Boruta
 ```{r}
-cat("the precision for the boruta model is ", prec_bor)
+cat("the precision for the boruta model is ", round(prec_bor,3))
 ```
 
 ### f1 = 2TP / (2TP + FP + FN) - Boruta
 ```{r}
 
- cat("the f1 for the boruta model is ", f1_bor)
+ cat("the f1 for the boruta model is ", round(f1_bor,3))
 
 ```
 
-## 5.2.4 Model Comparison
+## 5.2.4 Model Comparison - Basic Forest vs. Boruta Forest
 
 ### OOB Comparison
 
@@ -245,13 +310,58 @@ In AGDS Book Chapter 11, you learned how to optimize hyperparameters using cross
 
 ## 5.3.1 Hyperparameter tuning 
 
-Using the training data subset, implement a 5-fold cross-validation to optimise the hyperparameters mtry and min.node.size of the same Random Forest model as implemented above. You may use the {caret} library as demonstrated in AGDS Book.
-
-
 ```{r}
 source("../analysis/ex_soil/analys_boruta_rf_tuned.R")
 ```
 
+Using the training data subset, implement a 5-fold cross-validation to optimise the hyperparameters mtry and min.node.size of the same Random Forest model as implemented above. You may use the {caret} library as demonstrated in AGDS Book.
+
+## Hyperparameter Tuning
+
+For tuning, the Caret library is used, allowing to check different ranges for the hyperparameters used combined. The following code was used:
+
+```{r}
+# Load required libraries
+library(caret)
+library(ranger)
+
+# Set seed for reproducibility
+set.seed(199)
+
+# Define the hyperparameter grid
+mtry_values <- seq(20,38,2)
+min.node.size_values <- seq(10,30,2)
+# Create a data frame to store results
+results <- data.frame()
+
+# Perform hyperparameter tuning with 5-fold cross-validation
+
+# Train the model using caret::train for classification
+mod <- caret::train(
+  x = df_train_bor[, predictors_selected],
+  y = df_train_bor[, target],
+  method = "ranger",
+  metric = "Accuracy",
+  trControl = trainControl(
+    method = "cv",
+    number = 5,
+    savePredictions = "final"
+  ),
+  tuneGrid = expand.grid(
+    .mtry = mtry_values,
+    .min.node.size = min.node.size_values,
+    .splitrule = "gini"  # or "extratrees" or "entropy", depending on your preference
+  ),
+  replace = FALSE,
+  sample.fraction = 0.5,
+  num.trees = 100,
+  seed = 1982
+)
+
+
+```
+
+### Optimal hyperparameters
 
 ```{r}
 ## compare hyperparameters
@@ -265,23 +375,23 @@ cat("the optimal value vor mtry is", opt_mtry)
 
 ```
 
-### comparison table for hyper parameters
+### comparison table for hyperparameters
+
+we can illustrate the different hyperparameters in a table. 
 ```{r}
 hyper.param.table
 ```
-Comment: The optimal values vary quite strong when changing the random seed, so this shouldnt matter to much. This is also in line with the findings of Schratz et. al (2019), who pointed out that hyperparameter tuning has negligible effects for Random Forest models. 
+Comment: The optimal values vary quite strong when changing the random seed, so this shouldn't matter to much. This is also in lin e with the findings of Schratz et. al (2019), who pointed out that hyperparameter tuning has negligible effects for Random Forest models. 
 
 
-## 5.3.2 Evaluation of tuned vs. untuned model.
+## 5.3.2 Train Tuned Boruta Random Forest
 
 Evaluate the optimized model on the test set using the same metrics as considered above. Does the model generalise better to unseen data than the initial model (which used default hyperparameters, see ?ranger::ranger).
 
 
-### Train new ranger model with hyperparameters set to the optimal ones. 
-
-
 ### Print Random Forest - Boruta Tuned Forest
-
+ 
+Again, we can print our random forest. This time the Hyperparameters are set to the optimal ones. 
 ```{r}
 # quick report and performance of trained model object
 rf_bor_tuned
@@ -301,36 +411,37 @@ conf_matrix_bor_tuned$table
 
 ### Accuracy = (TP + TN )/ - Boruta Tuned
 ```{r}
- cat("the accuracy for the tuned Boruta model is ",acc_bor_tuned)
+ cat("The accuracy for the tuned Boruta model is ",acc_bor_tuned)
 ```
 
 ### Precision = TP / (TP + FP) - Boruta Tuned
 
 ```{r}
- cat("the Precision for the tuned Boruta model is ",prec_bor_tuned)
+ cat("The Precision for the tuned Boruta model is ",prec_bor_tuned)
 ```
 
 
 ### f1 = 2TP / (2TP + FP + FN)  - Boruta Tuned
 
 ```{r}
- cat("the F1 for the tuned Boruta model is ",f1_bor_tuned)
+ cat("The F1 for the tuned Boruta model is ",f1_bor_tuned)
 ```
 
 
 ### OOB prediction error - Boruta Tuned
 ```{r}
- cat("the OOB for the tuned Boruta model is ",obb_bor_tuned)
+ cat("The OOB for the tuned Boruta model is ",obb_bor_tuned)
 ```
 
 
 ### Comparison table for all models
 
+Again, we can show the different metrics on a table for comparison. This Time for all models. 
+
 ```{r}
 diag_table_3
 ```
-Considering only the prediction error, the tuned Boruta model performs worse than the
-untuned boruta model. Considering all other indicators, the tuned model performs better. 
+Considering only the prediction error, the tuned Boruta model performs better than the untuned boruta model. Considering all other indicators, the tuned model performs better. 
 
 
 # 5.4 Probabilistic predictions
@@ -356,6 +467,8 @@ rf_bor_prob
 ```
 
 ### Prepare vectors for AOC Curve
+
+In order to plot the AOC curve, a new dataframe is set together, which containes every point of the curve constructed.
 ```{r}
 head(conf_table)
 ```
@@ -369,6 +482,9 @@ Establish the Reicever-operating-characteristic curve, as described in AGDS Book
  knitr::include_graphics("../plots/ex_soil/aoc.png")
 
 ```
+The red vertical lines show two possible treshholds, which could be chosen. 
+
+
 
 ## 5.4.2 Infrastructure Treshholds
 
@@ -389,7 +505,7 @@ This said, this is an extremely conservative choice. Alternatively, the treshhol
 For the second case, I would chose a treshhold, which maximises an overall metric, e.g. the F1.
 
 ```{r}
-cat ("The the treshhold returning the highest F1 would be ", max_treshold_F1, "with a a corresponding F1 of ",round(max(conf_table$f1),3) )
+cat ("The treshhold returning the highest F1 would be ", max_treshold_F1, "with a a corresponding F1 of ",round(max(conf_table$f1),3) )
 ```
 
 ### Would you chose the same threshold in both cases? If not, explain why. 
