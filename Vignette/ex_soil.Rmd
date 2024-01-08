@@ -524,7 +524,7 @@ Answer :
 An analogy would be the testing of new drugs:
 
 While testing a new drug for a serious disease, e.g. cancer, we want to minimize
-Type I Errors, while Type II Errors are not very crucial. I.e. we only want to measure the effect of the drug given it exists (minimize false positives) and we accept,rejecting the use of the drug in some cases, event though it could help (we have more false negatives in return)
+Type I Errors, while Type II Errors are not very crucial. I.e. we only want to measure the effect of the drug given it really does exist (minimize false positives) and we accept rejecting the use of the drug in some cases, even though it could help (we have more false negatives in return)
 
 The other case would be the assessment of side effects of a new drug.
 
